@@ -12,8 +12,9 @@ import os
 # LOAD DATASET
 # ==========================================================
 
-accepted_path = "accepted_2014_2018_cleaned.csv"
-rejected_path = "rejected_2014_2018_sampled.csv"
+accepted_path = r"D:\Github\Tugas Kuliah\lendingclubmsar\Data EA ZAQY\accepted_2014_2018_cleaned.csv"
+
+rejected_path = r"D:\Github\Tugas Kuliah\lendingclubmsar\Data EA ZAQY\rejected_2014_2018_sampled.csv"
 
 accepted_df = pd.read_csv(accepted_path, low_memory=False)
 rejected_df = pd.read_csv(rejected_path, low_memory=False)
@@ -531,6 +532,67 @@ macro_df = pd.DataFrame({
 
 print("macroeconomic_indicators :", macro_df.shape)
 
+
+# monthly table
+# Generate monthly date range
+monthly_dates = pd.date_range(
+    start="2014-01-01",
+    end="2018-12-01",
+    freq="MS"
+)
+
+macro_monthly_df = pd.DataFrame({
+
+    "macro_id": range(
+        1,
+        len(monthly_dates) + 1
+    ),
+
+    "date": monthly_dates,
+
+    # Simulated monthly macroeconomic indicators
+    "inflation_rate": np.round(
+        np.random.uniform(1.0, 3.5, len(monthly_dates)),
+        2
+    ),
+
+    "interest_rate": np.round(
+        np.random.uniform(0.25, 5.0, len(monthly_dates)),
+        2
+    ),
+
+    "unemployment_rate": np.round(
+        np.random.uniform(3.5, 8.0, len(monthly_dates)),
+        2
+    ),
+
+    "gdp_growth": np.round(
+        np.random.uniform(1.5, 4.5, len(monthly_dates)),
+        2
+    ),
+
+    "fed_rate": np.round(
+        np.random.uniform(0.25, 4.0, len(monthly_dates)),
+        2
+    ),
+
+    "consumer_price_index": np.round(
+        np.random.uniform(200, 280, len(monthly_dates)),
+        2
+    ),
+
+    "financial_stress_index": np.round(
+        np.random.uniform(0.1, 1.0, len(monthly_dates)),
+        2
+    )
+})
+
+# Extract year and month
+macro_monthly_df["year"] = macro_monthly_df["date"].dt.year
+macro_monthly_df["month"] = macro_monthly_df["date"].dt.month
+
+print("macroeconomic_indicators :", macro_monthly_df.shape)
+
 # ==========================================================
 # 12. MSAR FORECASTING
 # ==========================================================
@@ -601,6 +663,11 @@ feature_importance.to_csv(
 
 macro_df.to_csv(
     f"{output_dir}/macroeconomic_indicators.csv",
+    index=False
+)
+
+macro_monthly_df.to_csv(
+    f"{output_dir}/macroeconomic_indicators_monthly.csv",
     index=False
 )
 
