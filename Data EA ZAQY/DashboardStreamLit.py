@@ -413,14 +413,13 @@ elif page == "Scenario Simulation":
         len(rejected)
     )
 
+    approval_rate = (
+        len(approved) / len(fact_accepted)
+    ) * 100
+
     col3.metric(
         "Approval Rate",
-        f"""
-        {
-            (len(approved) / len(fact_accepted)) * 100
-            :.2f
-        }%
-        """
+        f"{approval_rate:.2f}%"
     )
 
     st.divider()
