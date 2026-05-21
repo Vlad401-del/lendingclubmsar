@@ -1,0 +1,49 @@
+{
+  "explainer_type": "TreeExplainer",
+  "model_explained": "Random Forest",
+  "shap_sample_size": 500,
+  "base_value": 0.4998045392685818,
+  "n_features": 22,
+  "top_10_global_features": [
+    {
+      "feature": "int_rate",
+      "mean_abs_shap": 0.05739850424169386
+    },
+    {
+      "feature": "grade",
+      "mean_abs_shap": 0.04884696827308458
+    },
+    {
+      "feature": "term",
+      "mean_abs_shap": 0.036115078929149474
+    },
+    {
+      "feature": "dti",
+      "mean_abs_shap": 0.02133287556622452
+    },
+    {
+      "feature": "loan_amnt",
+      "mean_abs_shap": 0.020644001239947356
+    },
+    {
+      "feature": "avg_cur_bal",
+      "mean_abs_shap": 0.019946322022513972
+    },
+    {
+      "feature": "fico_range_low",
+      "mean_abs_shap": 0.01925735881100318
+    },
+    {
+      "feature": "tot_cur_bal",
+      "mean_abs_shap": 0.013549531692358497
+    },
+    {
+      "feature": "mort_acc",
+      "mean_abs_shap": 0.01169800341429827
+    },
+    {
+      "feature": "verification_status",
+      "mean_abs_shap": 0.010479557884540644
+    }
+  ]
+}

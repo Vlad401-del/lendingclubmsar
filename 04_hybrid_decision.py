@@ -33,7 +33,8 @@ OUTPUT_DIR = "ml_output"
 
 # Nama tabel di Supabase
 TABLE_REGIME = "msar_regime_results"
-TABLE_LOANS = "accepted_2014_2018_cleaned"
+# Nama file lokal
+LOCAL_CSV_INPUT = "accepted_2014_2018_cleaned.csv"
 TABLE_DECISIONS = "hybrid_decisions"
 TABLE_SCENARIOS = "scenario_comparison"
 
@@ -79,8 +80,8 @@ with open(f"{OUTPUT_DIR}/shap_meta.json", "r") as f:
 
 print(f"SHAP Base Value  : {shap_meta['base_value']:.4f}")
 
-# --- 1d. Load data lengkap dari Supabase ---
-df = read_from_supabase(TABLE_LOANS, engine)
+# --- 1d. Load data lengkap dari lokal (CSV) ---
+df = pd.read_csv(LOCAL_CSV_INPUT, low_memory=False)
 
 # Cleaning lanjutan (sama seperti 02_credit_model.py)
 df = df.drop_duplicates()

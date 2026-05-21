@@ -1,0 +1,21 @@
+{
+  "model": "MarkovAutoregression",
+  "k_regimes": 2,
+  "order": 1,
+  "switching_ar": true,
+  "switching_variance": true,
+  "endog_variable": "financial_stress_index",
+  "exog_variables": [
+    "fed_rate"
+  ],
+  "n_observations": 60,
+  "log_likelihood": -0.7641912040504184,
+  "aic": 19.528382408100835,
+  "bic": 38.226219403252315,
+  "regime_0_label": "STABIL",
+  "regime_1_label": "VOLATIL",
+  "regime_0_mean_delinquency": 0.28375,
+  "regime_1_mean_delinquency": 0.6816279069767441,
+  "months_stabil": 16,
+  "months_volatil": 43
+}

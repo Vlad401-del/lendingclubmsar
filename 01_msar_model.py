@@ -112,10 +112,27 @@ macro_df = macro_df.set_index("date")
 # Pastikan frekuensi bulanan (diperlukan oleh statsmodels)
 macro_df.index.freq = "MS"
 
-print(f"\nRentang data   : {macro_df.index.min()} s/d {macro_df.index.max()}")
-print(f"Total bulan    : {len(macro_df)}")
-print("\nPreview data (5 baris pertama):")
-print(macro_df[["Fed-Funds-Rate", "Inflasi", "Delinquency_Rate"]].head())
+# ----------------------------------------------------------
+# Memetakan Nama Kolom Baru dari Supabase
+# ----------------------------------------------------------
+
+# Deteksi kolom secara dinamis berdasarkan apa yang ada di Supabase
+col_fed = "fed_rate" if "fed_rate" in macro_df.columns else "interest_rate"
+col_inflasi = "inflation_rate" if "inflation_rate" in macro_df.columns else "Inflasi"
+
+# Gunakan financial_stress_index sebagai indikator krisis (pengganti Delinquency_Rate)
+if "financial_stress_index" in macro_df.columns:
+    col_risk = "financial_stress_index"
+elif "unemployment_rate" in macro_df.columns:
+    col_risk = "unemployment_rate"
+else:
+    col_risk = "Delinquency_Rate"
+
+print(f"\nPreview data (5 baris pertama):")
+try:
+    print(macro_df[[col_fed, col_inflasi, col_risk]].head())
+except KeyError:
+    print(macro_df.head())
 
 # ==========================================================
 # 2. FITTING MODEL MSAR
@@ -127,24 +144,15 @@ print("=" * 60)
 
 from statsmodels.tsa.regime_switching.markov_autoregression import MarkovAutoregression
 
-# Kita gunakan Delinquency_Rate sebagai variabel utama (endogen)
-# karena paling merepresentasikan risiko gagal bayar agregat.
-# Fed-Funds-Rate digunakan sebagai variabel eksogen (pengaruh eksternal).
+endog = macro_df[col_risk].dropna()
+exog = macro_df.loc[endog.index, [col_fed]].copy()
 
-endog = macro_df["Delinquency_Rate"].dropna()
-exog = macro_df.loc[endog.index, ["Fed-Funds-Rate"]].copy()
-
-print(f"Variabel Endogen    : Delinquency_Rate ({len(endog)} observasi)")
-print(f"Variabel Eksogen    : Fed-Funds-Rate")
+print(f"Variabel Endogen    : {col_risk} ({len(endog)} observasi)")
+print(f"Variabel Eksogen    : {col_fed}")
 print(f"Jumlah Regime       : 2 (Stabil & Volatil)")
 print(f"Order AR            : 1 (Autoregressive lag 1)")
 
 # Fitting MSAR:
-#   k_regimes=2  -> 2 regime (stabil vs volatil)
-#   order=1      -> AR(1) pada setiap regime
-#   switching_ar -> koefisien AR berbeda di tiap regime
-#   switching_variance -> variansi error berbeda di tiap regime
-
 model = MarkovAutoregression(
     endog=endog,
     k_regimes=2,
@@ -179,13 +187,14 @@ regime_labels = result.smoothed_marginal_probabilities.iloc[:, 1] > 0.5
 regime_series = regime_labels.astype(int)
 
 # Tentukan mana regime stabil dan mana volatil
-mean_regime_0 = endog[regime_series == 0].mean()
-mean_regime_1 = endog[regime_series == 1].mean()
+aligned_endog = endog.loc[regime_series.index]
+mean_regime_0 = aligned_endog[regime_series == 0].mean()
+mean_regime_1 = aligned_endog[regime_series == 1].mean()
 
-print(f"\nRata-rata Delinquency di Regime 0: {mean_regime_0:.4f}%")
-print(f"Rata-rata Delinquency di Regime 1: {mean_regime_1:.4f}%")
+print(f"\nRata-rata Risk Indicator di Regime 0: {mean_regime_0:.4f}")
+print(f"Rata-rata Risk Indicator di Regime 1: {mean_regime_1:.4f}")
 
-# Labeling: regime dengan delinquency lebih tinggi = VOLATIL
+# Labeling: regime dengan risk lebih tinggi = VOLATIL
 if mean_regime_1 > mean_regime_0:
     label_map = {0: "STABIL", 1: "VOLATIL"}
 else:
@@ -200,9 +209,9 @@ print(f"Mapping Regime      : {label_map}")
 # ==========================================================
 
 regime_output = pd.DataFrame({
-    "date": endog.index,
-    "delinquency_rate": endog.values,
-    "fed_funds_rate": exog["Fed-Funds-Rate"].values,
+    "date": regime_series.index,
+    "delinquency_rate": aligned_endog.values,
+    "fed_funds_rate": exog.loc[regime_series.index, col_fed].values,
     "regime_code": regime_series.values,
     "regime_label": regime_series.map(label_map).values,
     "prob_stabil": smoothed_probs.iloc[:, 0].values,
@@ -242,8 +251,8 @@ model_params = {
     "order": 1,
     "switching_ar": True,
     "switching_variance": True,
-    "endog_variable": "Delinquency_Rate",
-    "exog_variables": ["Fed-Funds-Rate"],
+    "endog_variable": col_risk,
+    "exog_variables": [col_fed],
     "n_observations": int(len(endog)),
     "log_likelihood": float(result.llf),
     "aic": float(result.aic),

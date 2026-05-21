@@ -101,9 +101,12 @@ print("=" * 60)
 shap_values = explainer.shap_values(X_shap)
 
 # Untuk klasifikasi biner, shap_values bisa berupa list [class_0, class_1]
+# atau array 3D dengan bentuk (n_samples, n_features, n_classes).
 # Kita ambil shap values untuk kelas 1 (Charged Off / Gagal Bayar)
 if isinstance(shap_values, list):
     shap_values_default = shap_values[1]  # Kelas "Charged Off"
+elif isinstance(shap_values, np.ndarray) and len(shap_values.shape) == 3:
+    shap_values_default = shap_values[:, :, 1]
 else:
     shap_values_default = shap_values
 

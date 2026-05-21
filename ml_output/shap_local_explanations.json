@@ -1,0 +1,125 @@
+[
+  {
+    "label": "GAGAL BAYAR (PD Tertinggi)",
+    "pd_probability": 0.8314,
+    "top_factors": [
+      {
+        "rank": 1,
+        "feature": "grade",
+        "value": 5.0,
+        "shap_value": 0.0794,
+        "direction": "increase_risk"
+      },
+      {
+        "rank": 2,
+        "feature": "int_rate",
+        "value": 25.69,
+        "shap_value": 0.0779,
+        "direction": "increase_risk"
+      },
+      {
+        "rank": 3,
+        "feature": "term",
+        "value": 1.0,
+        "shap_value": 0.0655,
+        "direction": "increase_risk"
+      },
+      {
+        "rank": 4,
+        "feature": "avg_cur_bal",
+        "value": 2202.0,
+        "shap_value": 0.0308,
+        "direction": "increase_risk"
+      },
+      {
+        "rank": 5,
+        "feature": "dti",
+        "value": 28.87,
+        "shap_value": 0.0296,
+        "direction": "increase_risk"
+      }
+    ]
+  },
+  {
+    "label": "LANCAR (PD Terendah)",
+    "pd_probability": 0.0226,
+    "top_factors": [
+      {
+        "rank": 1,
+        "feature": "int_rate",
+        "value": 6.49,
+        "shap_value": -0.1166,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 2,
+        "feature": "grade",
+        "value": 0.0,
+        "shap_value": -0.0908,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 3,
+        "feature": "fico_range_low",
+        "value": 770.0,
+        "shap_value": -0.0604,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 4,
+        "feature": "term",
+        "value": 0.0,
+        "shap_value": -0.0236,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 5,
+        "feature": "bc_open_to_buy",
+        "value": 26261.0,
+        "shap_value": -0.0228,
+        "direction": "decrease_risk"
+      }
+    ]
+  },
+  {
+    "label": "BORDERLINE (PD ~30%)",
+    "pd_probability": 0.2997,
+    "top_factors": [
+      {
+        "rank": 1,
+        "feature": "avg_cur_bal",
+        "value": 30261.0,
+        "shap_value": -0.0537,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 2,
+        "feature": "int_rate",
+        "value": 12.99,
+        "shap_value": -0.04,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 3,
+        "feature": "term",
+        "value": 1.0,
+        "shap_value": 0.0379,
+        "direction": "increase_risk"
+      },
+      {
+        "rank": 4,
+        "feature": "tot_cur_bal",
+        "value": 453916.0,
+        "shap_value": -0.0348,
+        "direction": "decrease_risk"
+      },
+      {
+        "rank": 5,
+        "feature": "total_acc",
+        "value": 62.0,
+        "shap_value": -0.0276,
+        "direction": "decrease_risk"
+      }
+    ]
+  }
+]

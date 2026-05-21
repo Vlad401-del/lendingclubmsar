@@ -1,0 +1,56 @@
+{
+  "best_model": "Random Forest",
+  "best_auc_roc": 0.7203554289700527,
+  "test_size": 0.2,
+  "random_state": 42,
+  "n_features": 22,
+  "numeric_features": [
+    "loan_amnt",
+    "int_rate",
+    "dti",
+    "annual_inc",
+    "fico_range_low",
+    "revol_bal",
+    "revol_util",
+    "total_acc",
+    "open_acc",
+    "pub_rec",
+    "delinq_2yrs",
+    "inq_last_6mths",
+    "total_rev_hi_lim",
+    "avg_cur_bal",
+    "bc_open_to_buy",
+    "mort_acc",
+    "tot_cur_bal"
+  ],
+  "categorical_features": [
+    "grade",
+    "home_ownership",
+    "verification_status",
+    "purpose",
+    "term"
+  ],
+  "train_samples": 44644,
+  "test_samples": 11161,
+  "target_distribution": {
+    "fully_paid": 44282,
+    "charged_off": 11523,
+    "default_rate_pct": 20.65
+  },
+  "comparison": {
+    "Random Forest": {
+      "AUC-ROC": 0.7204,
+      "Accuracy": 0.7453,
+      "F1-Score": 0.4253,
+      "Precision": 0.3982,
+      "Recall": 0.4564
+    },
+    "LightGBM": {
+      "AUC-ROC": 0.7202,
+      "Accuracy": 0.6674,
+      "F1-Score": 0.4426,
+      "Precision": 0.3385,
+      "Recall": 0.6395
+    }
+  }
+}

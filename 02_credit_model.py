@@ -44,22 +44,22 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 
-# Nama tabel di Supabase
-TABLE_INPUT = "accepted_2014_2018_cleaned"
+# Nama file lokal
+LOCAL_CSV_INPUT = "accepted_2014_2018_cleaned.csv"
 TABLE_X_TEST = "ml_x_test"
 TABLE_Y_TEST = "ml_y_test"
 TABLE_PREDICTIONS = "ml_credit_predictions"
 
 # ==========================================================
-# 1. LOAD DATA DARI SUPABASE
+# 1. LOAD DATA DARI LOKAL (CSV)
 # ==========================================================
 
 print("=" * 60)
-print("TAHAP 1: MEMUAT DATASET DARI SUPABASE")
+print("TAHAP 1: MEMUAT DATASET DARI FILE LOKAL")
 print("=" * 60)
 
 engine = get_engine()
-df = read_from_supabase(TABLE_INPUT, engine)
+df = pd.read_csv(LOCAL_CSV_INPUT, low_memory=False)
 
 print(f"Total baris  : {df.shape[0]}")
 print(f"Total kolom  : {df.shape[1]}")
