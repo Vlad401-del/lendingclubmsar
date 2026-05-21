@@ -25,7 +25,7 @@ st.set_page_config(
 # SUPABASE CONNECTION
 # ==========================================================
 
-DB_CONN = "postgresql://postgres.ddbepkvfyhgaikpzxelg:EA0supabase@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
+DB_CONN = "postgresql://postgres.ddbepkvfyhgaikpzxelg:EA0supabase@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
 
 # Membuat engine koneksi database
 engine = create_engine(DB_CONN)
@@ -40,9 +40,16 @@ def load_table(table_name):
     query = f"SELECT * FROM {table_name}"
     return pd.read_sql(query, con=engine)
 
+@st.cache_data
+def get_row_count(table_name):
+    # Mengambil jumlah baris tabel tanpa memuat seluruh datanya
+    query = f"SELECT COUNT(*) FROM {table_name}"
+    df = pd.read_sql(query, con=engine)
+    return int(df.iloc[0, 0])
+
 # Load tables
 fact_accepted = load_table("fact_accepted_loan")
-fact_rejected = load_table("fact_rejected_loan")
+total_rejected = get_row_count("fact_rejected_loan")
 dim_risk = load_table("dim_risk_grade")
 macro_df = load_table("macroeconomic_indicators")
 forecast_df = load_table("msar_forecasting")
@@ -74,7 +81,7 @@ if page == "Executive Overview":
     st.title("📊 Executive Overview")
 
     total_accepted = len(fact_accepted)
-    total_rejected = len(fact_rejected)
+    # total_rejected is defined globally via database count query
 
     total_application = (
         total_accepted + total_rejected
