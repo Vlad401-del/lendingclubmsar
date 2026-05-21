@@ -2,6 +2,11 @@
 # 02_CREDIT_MODEL.py
 # Micro-Risk Engine: Prediksi Probabilitas Gagal Bayar (PD)
 # Menggunakan Random Forest dan LightGBM
+#
+# DATA SOURCE : Supabase -> tabel "accepted_2014_2018_cleaned"
+# DATA OUTPUT : Supabase -> tabel "ml_x_test", "ml_y_test",
+#                           "ml_credit_predictions"
+#               Lokal    -> ml_output/*.pkl, ml_output/*.json
 # ==========================================================
 
 import pandas as pd
@@ -27,35 +32,109 @@ from sklearn.metrics import (
     recall_score
 )
 
+from db_config import get_engine, save_to_supabase, read_from_supabase
+
 # ==========================================================
 # KONFIGURASI
 # ==========================================================
 
-DATA_PATH = "accepted_2014_2018_cleaned.csv"
 OUTPUT_DIR = "ml_output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 
+# Nama tabel di Supabase
+TABLE_INPUT = "accepted_2014_2018_cleaned"
+TABLE_X_TEST = "ml_x_test"
+TABLE_Y_TEST = "ml_y_test"
+TABLE_PREDICTIONS = "ml_credit_predictions"
+
 # ==========================================================
-# 1. LOAD DATA
+# 1. LOAD DATA DARI SUPABASE
 # ==========================================================
 
 print("=" * 60)
-print("TAHAP 1: MEMUAT DATASET LENDING CLUB")
+print("TAHAP 1: MEMUAT DATASET DARI SUPABASE")
 print("=" * 60)
 
-df = pd.read_csv(DATA_PATH, low_memory=False)
+engine = get_engine()
+df = read_from_supabase(TABLE_INPUT, engine)
+
 print(f"Total baris  : {df.shape[0]}")
 print(f"Total kolom  : {df.shape[1]}")
 
 # ==========================================================
-# 2. PENYIAPAN VARIABEL TARGET
+# 2. CLEANING LANJUTAN (dari Star_Schema_Code.py)
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 2: MENYIAPKAN VARIABEL TARGET")
+print("TAHAP 2: CLEANING LANJUTAN")
+print("=" * 60)
+
+rows_before = len(df)
+
+# --- 2a. Hapus Duplikat Penuh ---
+df = df.drop_duplicates()
+print(f"Setelah hapus duplikat penuh  : {len(df)} baris (hapus {rows_before - len(df)})")
+
+# --- 2b. Hapus Duplikat berdasarkan ID ---
+if "id" in df.columns:
+    before = len(df)
+    df = df.drop_duplicates(subset=["id"])
+    print(f"Setelah hapus duplikat ID     : {len(df)} baris (hapus {before - len(df)})")
+
+# --- 2c. Standarisasi Teks ---
+text_cols = df.select_dtypes(include=["object", "string"]).columns
+for col in text_cols:
+    df[col] = df[col].astype(str).str.strip()
+
+uppercase_cols = ["grade", "sub_grade", "addr_state", "home_ownership", "verification_status"]
+for col in uppercase_cols:
+    if col in df.columns:
+        df[col] = df[col].str.upper()
+
+if "emp_length" in df.columns:
+    df["emp_length"] = (
+        df["emp_length"].astype(str)
+        .str.replace(" years", "", regex=False)
+        .str.replace(" year", "", regex=False)
+    )
+
+print(f"Standarisasi teks             : selesai")
+
+# --- 2d. Validasi Tipe Data ---
+numeric_validation_cols = ["loan_amnt", "int_rate", "dti", "annual_inc", "fico_range_low"]
+for col in numeric_validation_cols:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+print(f"Validasi tipe numerik         : selesai")
+
+# --- 2e. Filter Nilai Tidak Valid ---
+if "loan_amnt" in df.columns:
+    before = len(df)
+    df = df[df["loan_amnt"] >= 0]
+    print(f"Filter loan_amnt negatif      : hapus {before - len(df)} baris")
+
+if "dti" in df.columns:
+    before = len(df)
+    df = df[df["dti"] <= 100]
+    print(f"Filter DTI > 100              : hapus {before - len(df)} baris")
+
+if "fico_range_low" in df.columns:
+    before = len(df)
+    df = df[df["fico_range_low"] >= 300]
+    print(f"Filter FICO < 300             : hapus {before - len(df)} baris")
+
+print(f"\nTotal setelah cleaning        : {len(df)} baris (dari {rows_before})")
+
+# ==========================================================
+# 3. PENYIAPAN VARIABEL TARGET
+# ==========================================================
+
+print("\n" + "=" * 60)
+print("TAHAP 3: MENYIAPKAN VARIABEL TARGET")
 print("=" * 60)
 
 # Hanya pinjaman yang sudah selesai
@@ -68,11 +147,11 @@ print(f"Fully Paid   : {(df['target'] == 0).sum()} ({(df['target'] == 0).mean()*
 print(f"Charged Off  : {(df['target'] == 1).sum()} ({(df['target'] == 1).mean()*100:.1f}%)")
 
 # ==========================================================
-# 3. SELEKSI FITUR UNTUK PEMODELAN
+# 4. SELEKSI FITUR UNTUK PEMODELAN
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 3: SELEKSI FITUR")
+print("TAHAP 4: SELEKSI FITUR")
 print("=" * 60)
 
 # Fitur numerik yang sudah tervalidasi penting dari Feature Importance
@@ -115,11 +194,11 @@ print(f"Fitur Kategorikal : {len(categorical_features)}")
 print(f"Total Fitur       : {len(all_features)}")
 
 # ==========================================================
-# 4. PREPROCESSING
+# 5. PREPROCESSING
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 4: PREPROCESSING DATA")
+print("TAHAP 5: PREPROCESSING DATA")
 print("=" * 60)
 
 X = df[all_features].copy()
@@ -151,22 +230,26 @@ X_train, X_test, y_train, y_test = train_test_split(
 print(f"\nTrain set          : {X_train.shape[0]} baris")
 print(f"Test set           : {X_test.shape[0]} baris")
 
-# Simpan nama fitur untuk SHAP nanti
+# Simpan nama fitur (lokal) untuk SHAP nanti
 feature_names = list(X.columns)
 joblib.dump(feature_names, f"{OUTPUT_DIR}/feature_names.pkl")
 joblib.dump(imputer, f"{OUTPUT_DIR}/imputer.pkl")
 joblib.dump(label_encoders, f"{OUTPUT_DIR}/label_encoders.pkl")
 
-# Simpan test set untuk SHAP
-X_test.to_csv(f"{OUTPUT_DIR}/X_test.csv", index=False)
-y_test.to_csv(f"{OUTPUT_DIR}/y_test.csv", index=False)
+# Simpan test set ke Supabase (agar script 03 bisa baca dari DB)
+save_to_supabase(X_test.reset_index(drop=True), TABLE_X_TEST, engine)
+save_to_supabase(
+    pd.DataFrame({"target": y_test.values}),
+    TABLE_Y_TEST,
+    engine
+)
 
 # ==========================================================
-# 5. PELATIHAN MODEL 1: RANDOM FOREST
+# 6. PELATIHAN MODEL 1: RANDOM FOREST
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 5A: MELATIH RANDOM FOREST")
+print("TAHAP 6A: MELATIH RANDOM FOREST")
 print("=" * 60)
 
 rf_model = RandomForestClassifier(
@@ -176,7 +259,7 @@ rf_model = RandomForestClassifier(
     min_samples_leaf=5,
     random_state=RANDOM_STATE,
     n_jobs=-1,
-    class_weight="balanced"  # Menangani ketimpangan kelas
+    class_weight="balanced"
 )
 
 rf_model.fit(X_train, y_train)
@@ -203,11 +286,11 @@ print(f"Confusion Matrix:")
 print(confusion_matrix(y_test, rf_pred))
 
 # ==========================================================
-# 6. PELATIHAN MODEL 2: LIGHTGBM
+# 7. PELATIHAN MODEL 2: LIGHTGBM
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 5B: MELATIH LIGHTGBM")
+print("TAHAP 6B: MELATIH LIGHTGBM")
 print("=" * 60)
 
 try:
@@ -221,7 +304,7 @@ try:
         min_child_samples=20,
         random_state=RANDOM_STATE,
         n_jobs=-1,
-        is_unbalance=True,  # Menangani ketimpangan kelas
+        is_unbalance=True,
         verbose=-1
     )
 
@@ -251,17 +334,17 @@ try:
     lgb_available = True
 
 except ImportError:
-    print("⚠️  LightGBM belum terinstall. Jalankan: pip install lightgbm")
-    print("    Melanjutkan hanya dengan Random Forest...")
+    print("[WARNING] LightGBM belum terinstall. Jalankan: pip install lightgbm")
+    print("          Melanjutkan hanya dengan Random Forest...")
     lgb_available = False
     lgb_auc = 0.0
 
 # ==========================================================
-# 7. PEMILIHAN MODEL TERBAIK
+# 8. PEMILIHAN MODEL TERBAIK
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 6: PERBANDINGAN & PEMILIHAN MODEL TERBAIK")
+print("TAHAP 7: PERBANDINGAN & PEMILIHAN MODEL TERBAIK")
 print("=" * 60)
 
 comparison = {
@@ -299,38 +382,36 @@ else:
     best_auc = rf_auc
     best_proba = rf_proba
 
-print(f"\n🏆 Model Terbaik    : {best_name}")
-print(f"   AUC-ROC Score    : {best_auc:.4f}")
+print(f"\n[BEST] Model Terbaik    : {best_name}")
+print(f"       AUC-ROC Score    : {best_auc:.4f}")
 
 # ==========================================================
-# 8. SIMPAN HASIL
+# 9. SIMPAN HASIL
 # ==========================================================
 
 print("\n" + "=" * 60)
-print("TAHAP 7: MENYIMPAN MODEL & HASIL")
+print("TAHAP 8: MENYIMPAN MODEL & HASIL")
 print("=" * 60)
 
-# Simpan model terbaik
+# --- Simpan model (lokal) ---
 joblib.dump(best_model, f"{OUTPUT_DIR}/best_credit_model.pkl")
-print(f"[SAVED] {OUTPUT_DIR}/best_credit_model.pkl ({best_name})")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/best_credit_model.pkl ({best_name})")
 
-# Simpan Random Forest juga (untuk perbandingan)
 joblib.dump(rf_model, f"{OUTPUT_DIR}/rf_model.pkl")
-print(f"[SAVED] {OUTPUT_DIR}/rf_model.pkl")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/rf_model.pkl")
 
 if lgb_available:
     joblib.dump(lgb_model, f"{OUTPUT_DIR}/lgb_model.pkl")
-    print(f"[SAVED] {OUTPUT_DIR}/lgb_model.pkl")
+    print(f"[LOCAL SAVED] {OUTPUT_DIR}/lgb_model.pkl")
 
-# Simpan prediksi probabilitas test set
+# --- Simpan prediksi ke Supabase ---
 pred_output = pd.DataFrame({
     "y_true": y_test.values,
     "pd_probability": best_proba
 })
-pred_output.to_csv(f"{OUTPUT_DIR}/credit_predictions.csv", index=False)
-print(f"[SAVED] {OUTPUT_DIR}/credit_predictions.csv")
+save_to_supabase(pred_output, TABLE_PREDICTIONS, engine)
 
-# Simpan metadata model
+# --- Simpan metadata model (lokal) ---
 model_meta = {
     "best_model": best_name,
     "best_auc_roc": best_auc,
@@ -351,7 +432,8 @@ model_meta = {
 
 with open(f"{OUTPUT_DIR}/credit_model_meta.json", "w") as f:
     json.dump(model_meta, f, indent=2)
-print(f"[SAVED] {OUTPUT_DIR}/credit_model_meta.json")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/credit_model_meta.json")
 
-print("\n✅ Model kredit selesai dilatih!")
-print("   Output ini akan digunakan oleh 03_shap_explainer.py")
+print("\n[DONE] Model kredit selesai dilatih!")
+print("   Output Supabase : tabel 'ml_x_test', 'ml_y_test', 'ml_credit_predictions'")
+print("   Output Lokal    : ml_output/*.pkl, ml_output/*.json")

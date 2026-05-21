@@ -3,6 +3,10 @@
 # Markov-Switching Autoregressive (MSAR) Model
 # Mendeteksi Regime Ekonomi (Stabil vs Volatil/Krisis)
 # dari data makroekonomi AS bulanan (2014-2018)
+#
+# DATA SOURCE : Supabase -> tabel "macro_monthly"
+# DATA OUTPUT : Supabase -> tabel "msar_regime_results"
+#               Lokal    -> ml_output/msar_model_params.json
 # ==========================================================
 
 import pandas as pd
@@ -13,23 +17,29 @@ import json
 
 warnings.filterwarnings("ignore")
 
+from db_config import get_engine, save_to_supabase, read_from_supabase
+
 # ==========================================================
 # KONFIGURASI
 # ==========================================================
 
-MACRO_DATA_PATH = "TrenEkonomiAS_2014_2018_EA.csv"
 OUTPUT_DIR = "ml_output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Nama tabel di Supabase
+TABLE_MACRO_INPUT = "macro_monthly"
+TABLE_REGIME_OUTPUT = "msar_regime_results"
+
 # ==========================================================
-# 1. LOAD & PARSE DATA MAKROEKONOMI
+# 1. LOAD & PARSE DATA MAKROEKONOMI DARI SUPABASE
 # ==========================================================
 
 print("=" * 60)
-print("TAHAP 1: MEMUAT DATA MAKROEKONOMI AS")
+print("TAHAP 1: MEMUAT DATA MAKROEKONOMI AS DARI SUPABASE")
 print("=" * 60)
 
-macro_df = pd.read_csv(MACRO_DATA_PATH)
+engine = get_engine()
+macro_df = read_from_supabase(TABLE_MACRO_INPUT, engine)
 
 print(f"Jumlah baris   : {macro_df.shape[0]}")
 print(f"Jumlah kolom   : {macro_df.shape[1]}")
@@ -53,7 +63,8 @@ def parse_indo_pct(value):
         return np.nan
 
 for col in ["Fed-Funds-Rate", "Inflasi", "Delinquency_Rate"]:
-    macro_df[col] = macro_df[col].apply(parse_indo_pct)
+    if col in macro_df.columns:
+        macro_df[col] = macro_df[col].apply(parse_indo_pct)
 
 # ----------------------------------------------------------
 # Parsing kolom tanggal (format: "Januari 2014")
@@ -65,16 +76,35 @@ bulan_map = {
     "September": 9, "Oktober": 10, "November": 11, "Desember": 12
 }
 
+# Cek nama kolom tanggal (bisa "Bulan dan Tahun" atau variasi lain)
+date_col = None
+for candidate in ["Bulan dan Tahun", "bulan_dan_tahun", "bulan dan tahun"]:
+    if candidate in macro_df.columns:
+        date_col = candidate
+        break
+
+if date_col is None:
+    # Fallback: coba kolom pertama yang bertipe string
+    str_cols = macro_df.select_dtypes(include=["object"]).columns
+    if len(str_cols) > 0:
+        date_col = str_cols[0]
+        print(f"  [INFO] Menggunakan kolom '{date_col}' sebagai kolom tanggal")
+
 def parse_indo_date(val):
     """Mengubah 'Januari 2014' menjadi datetime."""
     parts = str(val).strip().split()
     if len(parts) == 2:
-        bulan = bulan_map.get(parts[0], 1)
-        tahun = int(parts[1])
-        return pd.Timestamp(year=tahun, month=bulan, day=1)
-    return pd.NaT
+        bulan = bulan_map.get(parts[0], None)
+        if bulan:
+            tahun = int(parts[1])
+            return pd.Timestamp(year=tahun, month=bulan, day=1)
+    # Fallback: coba pd.to_datetime langsung
+    try:
+        return pd.to_datetime(val)
+    except Exception:
+        return pd.NaT
 
-macro_df["date"] = macro_df["Bulan dan Tahun"].apply(parse_indo_date)
+macro_df["date"] = macro_df[date_col].apply(parse_indo_date)
 macro_df = macro_df.dropna(subset=["date"])
 macro_df = macro_df.sort_values("date").reset_index(drop=True)
 macro_df = macro_df.set_index("date")
@@ -171,8 +201,8 @@ print(f"Mapping Regime      : {label_map}")
 
 regime_output = pd.DataFrame({
     "date": endog.index,
-    "Delinquency_Rate": endog.values,
-    "Fed_Funds_Rate": exog["Fed-Funds-Rate"].values,
+    "delinquency_rate": endog.values,
+    "fed_funds_rate": exog["Fed-Funds-Rate"].values,
     "regime_code": regime_series.values,
     "regime_label": regime_series.map(label_map).values,
     "prob_stabil": smoothed_probs.iloc[:, 0].values,
@@ -202,11 +232,10 @@ print("\n" + "=" * 60)
 print("TAHAP 5: MENYIMPAN HASIL")
 print("=" * 60)
 
-# Simpan tabel regime
-regime_output.to_csv(f"{OUTPUT_DIR}/msar_regime_results.csv", index=False)
-print(f"[SAVED] {OUTPUT_DIR}/msar_regime_results.csv")
+# --- Simpan ke Supabase ---
+save_to_supabase(regime_output, TABLE_REGIME_OUTPUT, engine)
 
-# Simpan parameter model sebagai JSON
+# --- Simpan parameter model sebagai JSON (lokal) ---
 model_params = {
     "model": "MarkovAutoregression",
     "k_regimes": 2,
@@ -229,7 +258,8 @@ model_params = {
 
 with open(f"{OUTPUT_DIR}/msar_model_params.json", "w") as f:
     json.dump(model_params, f, indent=2)
-print(f"[SAVED] {OUTPUT_DIR}/msar_model_params.json")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/msar_model_params.json")
 
-print("\n✅ Model MSAR selesai dilatih dan regime berhasil diekstraksi!")
-print("   Output ini akan digunakan oleh 04_hybrid_decision.py")
+print("\n[DONE] Model MSAR selesai dilatih dan regime berhasil diekstraksi!")
+print("   Output Supabase : tabel 'msar_regime_results'")
+print("   Output Lokal    : ml_output/msar_model_params.json")

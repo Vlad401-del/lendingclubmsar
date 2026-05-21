@@ -4,6 +4,14 @@
 # Mengintegrasikan MSAR (Macro Regime) dengan
 # Model Kredit (Micro PD) untuk menghasilkan keputusan
 # akhir: DISETUJUI atau DITOLAK
+#
+# DATA SOURCE : Supabase -> tabel "msar_regime_results",
+#                           "accepted_2014_2018_cleaned"
+#               Lokal    -> ml_output/best_credit_model.pkl,
+#                           ml_output/shap_meta.json
+# DATA OUTPUT : Supabase -> tabel "hybrid_decisions",
+#                           "scenario_comparison"
+#               Lokal    -> ml_output/hybrid_summary.json
 # ==========================================================
 
 import pandas as pd
@@ -15,18 +23,23 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+from db_config import get_engine, save_to_supabase, read_from_supabase
+
 # ==========================================================
 # KONFIGURASI
 # ==========================================================
 
 OUTPUT_DIR = "ml_output"
-DATA_PATH = "accepted_2014_2018_cleaned.csv"
+
+# Nama tabel di Supabase
+TABLE_REGIME = "msar_regime_results"
+TABLE_LOANS = "accepted_2014_2018_cleaned"
+TABLE_DECISIONS = "hybrid_decisions"
+TABLE_SCENARIOS = "scenario_comparison"
 
 # Threshold Hybrid Decision Rule:
-#   - Saat ekonomi STABIL  → toleransi PD lebih longgar
-#   - Saat ekonomi VOLATIL → toleransi PD diperketat
-THRESHOLD_STABIL = 0.40   # PD <= 40% → DISETUJUI
-THRESHOLD_VOLATIL = 0.20  # PD <= 20% → DISETUJUI
+THRESHOLD_STABIL = 0.40   # PD <= 40% -> DISETUJUI
+THRESHOLD_VOLATIL = 0.20  # PD <= 20% -> DISETUJUI
 
 # ==========================================================
 # 1. LOAD SEMUA KOMPONEN
@@ -36,7 +49,9 @@ print("=" * 60)
 print("TAHAP 1: MEMUAT SEMUA KOMPONEN MODEL")
 print("=" * 60)
 
-# --- 1a. Load Model Kredit ---
+engine = get_engine()
+
+# --- 1a. Load Model Kredit (lokal) ---
 best_model = joblib.load(f"{OUTPUT_DIR}/best_credit_model.pkl")
 feature_names = joblib.load(f"{OUTPUT_DIR}/feature_names.pkl")
 imputer = joblib.load(f"{OUTPUT_DIR}/imputer.pkl")
@@ -48,8 +63,9 @@ with open(f"{OUTPUT_DIR}/credit_model_meta.json", "r") as f:
 print(f"Model Kredit     : {credit_meta['best_model']}")
 print(f"AUC-ROC          : {credit_meta['best_auc_roc']:.4f}")
 
-# --- 1b. Load Regime MSAR ---
-regime_df = pd.read_csv(f"{OUTPUT_DIR}/msar_regime_results.csv", parse_dates=["date"])
+# --- 1b. Load Regime MSAR dari Supabase ---
+regime_df = read_from_supabase(TABLE_REGIME, engine)
+regime_df["date"] = pd.to_datetime(regime_df["date"])
 
 with open(f"{OUTPUT_DIR}/msar_model_params.json", "r") as f:
     msar_meta = json.load(f)
@@ -57,14 +73,21 @@ with open(f"{OUTPUT_DIR}/msar_model_params.json", "r") as f:
 print(f"MSAR Regime      : {msar_meta['months_stabil']} bulan stabil, "
       f"{msar_meta['months_volatil']} bulan volatil")
 
-# --- 1c. Load SHAP metadata ---
+# --- 1c. Load SHAP metadata (lokal) ---
 with open(f"{OUTPUT_DIR}/shap_meta.json", "r") as f:
     shap_meta = json.load(f)
 
 print(f"SHAP Base Value  : {shap_meta['base_value']:.4f}")
 
-# --- 1d. Load data lengkap ---
-df = pd.read_csv(DATA_PATH, low_memory=False)
+# --- 1d. Load data lengkap dari Supabase ---
+df = read_from_supabase(TABLE_LOANS, engine)
+
+# Cleaning lanjutan (sama seperti 02_credit_model.py)
+df = df.drop_duplicates()
+if "id" in df.columns:
+    df = df.drop_duplicates(subset=["id"])
+
+# Filter hanya loan yang selesai
 df = df[df["loan_status"].isin(["Fully Paid", "Charged Off"])].copy()
 
 print(f"Total peminjam   : {df.shape[0]}")
@@ -78,14 +101,13 @@ print("TAHAP 2: MENCOCOKKAN REGIME EKONOMI KE SETIAP PEMINJAM")
 print("=" * 60)
 
 # Parse tanggal di dataset pinjaman
-# Format issue_d biasanya: "Dec-2015" atau "2015-12-01"
 df["issue_date"] = pd.to_datetime(df["issue_d"], format="mixed", dayfirst=False)
 df["issue_month"] = df["issue_date"].dt.to_period("M")
 
 # Parse tanggal di regime
 regime_df["month_period"] = regime_df["date"].dt.to_period("M")
 
-# Buat mapping bulan → regime
+# Buat mapping bulan -> regime
 regime_map = dict(zip(
     regime_df["month_period"].astype(str),
     regime_df["regime_label"]
@@ -120,7 +142,6 @@ print("=" * 60)
 # Ambil fitur yang dibutuhkan model
 numeric_features = credit_meta["numeric_features"]
 categorical_features = credit_meta["categorical_features"]
-all_features = numeric_features + categorical_features
 
 # Validasi: hanya fitur yang ada
 numeric_features = [f for f in numeric_features if f in df.columns]
@@ -161,22 +182,17 @@ print("\n" + "=" * 60)
 print("TAHAP 4: MENERAPKAN HYBRID DECISION RULE")
 print("=" * 60)
 
-print(f"Threshold STABIL  : PD <= {THRESHOLD_STABIL*100:.0f}% → DISETUJUI")
-print(f"Threshold VOLATIL : PD <= {THRESHOLD_VOLATIL*100:.0f}% → DISETUJUI")
+print(f"Threshold STABIL  : PD <= {THRESHOLD_STABIL*100:.0f}% -> DISETUJUI")
+print(f"Threshold VOLATIL : PD <= {THRESHOLD_VOLATIL*100:.0f}% -> DISETUJUI")
 
 def hybrid_decision(row):
-    """
-    Logika keputusan hybrid:
-    Menggabungkan kondisi makroekonomi (MSAR regime)
-    dengan risiko individu (PD) untuk menghasilkan
-    keputusan akhir yang adaptif terhadap guncangan ekonomi.
-    """
+    """Logika keputusan hybrid."""
     regime = row["economic_regime"]
     pd_score = row["pd_probability"]
 
     if regime == "STABIL":
         threshold = THRESHOLD_STABIL
-    else:  # VOLATIL
+    else:
         threshold = THRESHOLD_VOLATIL
 
     if pd_score <= threshold:
@@ -197,7 +213,7 @@ def decision_reason(row):
 
     if decision == "DISETUJUI":
         return (
-            f"PD ({pd_score*100:.1f}%) berada di bawah threshold "
+            f"PD ({pd_score*100:.1f}%) di bawah threshold "
             f"{threshold*100:.0f}% (Regime: {regime}). "
             f"Risiko dapat diterima."
         )
@@ -205,7 +221,7 @@ def decision_reason(row):
         return (
             f"PD ({pd_score*100:.1f}%) melebihi threshold "
             f"{threshold*100:.0f}% (Regime: {regime}). "
-            f"Risiko terlalu tinggi untuk kondisi ekonomi saat ini."
+            f"Risiko terlalu tinggi."
         )
 
 # Terapkan keputusan
@@ -231,7 +247,7 @@ print("Distribusi Keputusan Hybrid:")
 for decision, count in decision_dist.items():
     print(f"  {decision}: {count} ({count/len(df)*100:.1f}%)")
 
-# Cross-tabulation: Keputusan vs Status Aktual
+# Cross-tabulation
 print("\n--- Cross-Tab: Keputusan Hybrid vs Status Aktual ---")
 crosstab = pd.crosstab(
     df["hybrid_decision"],
@@ -256,7 +272,6 @@ for regime in ["STABIL", "VOLATIL"]:
     print(f"    DITOLAK             : {rejected} ({rejected/len(subset)*100:.1f}%)")
     print(f"    Aktual Gagal Bayar  : {actual_default} ({actual_default/len(subset)*100:.1f}%)")
 
-    # Precision: dari yang ditolak, berapa persen memang benar gagal bayar?
     rejected_subset = subset[subset["hybrid_decision"] == "DITOLAK"]
     if len(rejected_subset) > 0:
         true_reject = (rejected_subset["loan_status"] == "Charged Off").sum()
@@ -282,7 +297,6 @@ for scenario_name, threshold in scenarios.items():
     approved = (df["pd_probability"] <= threshold).sum()
     rejected = (df["pd_probability"] > threshold).sum()
 
-    # Dari yang disetujui, berapa yang ternyata gagal bayar?
     approved_mask = df["pd_probability"] <= threshold
     if approved_mask.sum() > 0:
         false_approvals = (
@@ -315,7 +329,7 @@ print("\n" + "=" * 60)
 print("TAHAP 7: MENYIMPAN HASIL AKHIR")
 print("=" * 60)
 
-# Kolom output yang akan disimpan
+# Kolom output yang akan disimpan ke Supabase
 output_cols = [
     "id",
     "loan_amnt",
@@ -338,15 +352,15 @@ output_cols = [
 # Pastikan hanya kolom yang ada
 output_cols = [c for c in output_cols if c in df.columns]
 
-# Simpan keputusan hybrid per peminjam
+# --- Simpan keputusan hybrid ke Supabase ---
 hybrid_output = df[output_cols].copy()
-hybrid_output.to_csv(
-    f"{OUTPUT_DIR}/hybrid_decisions.csv",
-    index=False
-)
-print(f"[SAVED] {OUTPUT_DIR}/hybrid_decisions.csv")
+save_to_supabase(hybrid_output, TABLE_DECISIONS, engine)
 
-# Simpan ringkasan statistik
+# --- Simpan skenario simulasi ke Supabase ---
+scenario_df = pd.DataFrame(scenario_results)
+save_to_supabase(scenario_df, TABLE_SCENARIOS, engine)
+
+# --- Simpan ringkasan statistik (lokal) ---
 summary = {
     "total_borrowers": int(len(df)),
     "threshold_stabil": THRESHOLD_STABIL,
@@ -380,18 +394,10 @@ summary = {
 
 with open(f"{OUTPUT_DIR}/hybrid_summary.json", "w") as f:
     json.dump(summary, f, indent=2, ensure_ascii=False)
-print(f"[SAVED] {OUTPUT_DIR}/hybrid_summary.json")
-
-# Simpan skenario simulasi
-scenario_df = pd.DataFrame(scenario_results)
-scenario_df.to_csv(
-    f"{OUTPUT_DIR}/scenario_comparison.csv",
-    index=False
-)
-print(f"[SAVED] {OUTPUT_DIR}/scenario_comparison.csv")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/hybrid_summary.json")
 
 print("\n" + "=" * 60)
-print("✅ HYBRID DECISION ENGINE SELESAI!")
+print("[DONE] HYBRID DECISION ENGINE SELESAI!")
 print("=" * 60)
 print(f"""
 Arsitektur Hybrid MSAR telah menghasilkan keputusan
@@ -401,6 +407,8 @@ Ringkasan:
   DISETUJUI : {(df['hybrid_decision'] == 'DISETUJUI').sum()} peminjam
   DITOLAK   : {(df['hybrid_decision'] == 'DITOLAK').sum()} peminjam
 
-Seluruh output tersimpan di folder: {OUTPUT_DIR}/
-File-file ini siap digunakan oleh Dashboard Explainable AI.
+Output Supabase : tabel 'hybrid_decisions', 'scenario_comparison'
+Output Lokal    : ml_output/hybrid_summary.json
+
+Seluruh tabel Supabase siap digunakan oleh Dashboard EA!
 """)

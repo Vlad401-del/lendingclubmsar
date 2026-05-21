@@ -4,6 +4,13 @@
 # (SHapley Additive exPlanations)
 # Menjelaskan MENGAPA model memprediksi seorang peminjam
 # sebagai Gagal Bayar atau Lancar
+#
+# DATA SOURCE : Supabase -> tabel "ml_x_test"
+#               Lokal    -> ml_output/best_credit_model.pkl
+# DATA OUTPUT : Supabase -> tabel "shap_values",
+#                           "shap_global_importance"
+#               Lokal    -> ml_output/shap_meta.json,
+#                           ml_output/shap_local_explanations.json
 # ==========================================================
 
 import pandas as pd
@@ -15,14 +22,20 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+from db_config import get_engine, save_to_supabase, read_from_supabase
+
 # ==========================================================
 # KONFIGURASI
 # ==========================================================
 
 OUTPUT_DIR = "ml_output"
 SHAP_SAMPLE_SIZE = 500   # Jumlah sampel untuk kalkulasi SHAP
-                          # (500 sudah cukup representatif dan
-                          #  tidak akan membuat laptop crash)
+
+# Nama tabel di Supabase
+TABLE_X_TEST = "ml_x_test"
+TABLE_Y_TEST = "ml_y_test"
+TABLE_SHAP_VALUES = "shap_values"
+TABLE_SHAP_IMPORTANCE = "shap_global_importance"
 
 # ==========================================================
 # 1. LOAD MODEL & DATA
@@ -32,15 +45,17 @@ print("=" * 60)
 print("TAHAP 1: MEMUAT MODEL DAN DATA TEST SET")
 print("=" * 60)
 
-# Load model terbaik
+engine = get_engine()
+
+# Load model terbaik (lokal)
 best_model = joblib.load(f"{OUTPUT_DIR}/best_credit_model.pkl")
 feature_names = joblib.load(f"{OUTPUT_DIR}/feature_names.pkl")
 
-# Load test set
-X_test = pd.read_csv(f"{OUTPUT_DIR}/X_test.csv")
-y_test = pd.read_csv(f"{OUTPUT_DIR}/y_test.csv").squeeze()
+# Load test set dari Supabase
+X_test = read_from_supabase(TABLE_X_TEST, engine)
+y_test = read_from_supabase(TABLE_Y_TEST, engine).squeeze()
 
-# Load metadata model
+# Load metadata model (lokal)
 with open(f"{OUTPUT_DIR}/credit_model_meta.json", "r") as f:
     model_meta = json.load(f)
 
@@ -65,22 +80,14 @@ if len(X_test) > SHAP_SAMPLE_SIZE:
         n=SHAP_SAMPLE_SIZE,
         random_state=42
     ).reset_index(drop=True)
-    y_shap = y_test.loc[X_shap.index].reset_index(drop=True)
 else:
     X_shap = X_test.copy()
-    y_shap = y_test.copy()
 
 print(f"Sampel SHAP      : {len(X_shap)} baris")
 
-# Pilih Explainer berdasarkan tipe model
-if model_name == "LightGBM":
-    # TreeExplainer sangat efisien untuk model berbasis pohon
-    explainer = shap.TreeExplainer(best_model)
-    print("Explainer        : TreeExplainer (optimized for tree models)")
-else:
-    # RandomForest juga bisa menggunakan TreeExplainer
-    explainer = shap.TreeExplainer(best_model)
-    print("Explainer        : TreeExplainer (optimized for tree models)")
+# TreeExplainer sangat efisien untuk model berbasis pohon
+explainer = shap.TreeExplainer(best_model)
+print(f"Explainer        : TreeExplainer (optimized for {model_name})")
 
 # ==========================================================
 # 3. KALKULASI SHAP VALUES
@@ -101,7 +108,7 @@ else:
     shap_values_default = shap_values
 
 print(f"Shape SHAP Values: {shap_values_default.shape}")
-print("✅ SHAP Values berhasil dihitung!")
+print("[OK] SHAP Values berhasil dihitung!")
 
 # ==========================================================
 # 4. ANALISIS GLOBAL: FITUR MANA YANG PALING BERPENGARUH?
@@ -134,9 +141,9 @@ print("=" * 60)
 proba = best_model.predict_proba(X_shap)[:, 1]
 
 # Ambil 3 contoh: 1 gagal bayar, 1 lancar, 1 borderline
-idx_default = np.argmax(proba)        # PD tertinggi
-idx_safe = np.argmin(proba)           # PD terendah
-idx_border = np.argmin(np.abs(proba - 0.3))  # PD sekitar 30%
+idx_default = np.argmax(proba)
+idx_safe = np.argmin(proba)
+idx_border = np.argmin(np.abs(proba - 0.3))
 
 examples = [
     ("GAGAL BAYAR (PD Tertinggi)", idx_default),
@@ -162,8 +169,8 @@ for label, idx in examples:
         fname = feature_names[fi]
         fval = X_shap.iloc[idx, fi]
         shap_val = shap_row[fi]
-        direction = "↑ Meningkatkan risiko" if shap_val > 0 else "↓ Menurunkan risiko"
-        print(f"  {rank}. {fname} = {fval:.2f} (SHAP: {shap_val:+.4f}) → {direction}")
+        direction = ">> Meningkatkan risiko" if shap_val > 0 else "<< Menurunkan risiko"
+        print(f"  {rank}. {fname} = {fval:.2f} (SHAP: {shap_val:+.4f}) {direction}")
 
         factors.append({
             "rank": rank,
@@ -187,27 +194,22 @@ print("\n" + "=" * 60)
 print("TAHAP 6: MENYIMPAN HASIL SHAP")
 print("=" * 60)
 
-# Simpan SHAP values sebagai CSV
+# --- Simpan SHAP values ke Supabase ---
 shap_df = pd.DataFrame(
     shap_values_default,
     columns=feature_names
 )
-shap_df.to_csv(f"{OUTPUT_DIR}/shap_values.csv", index=False)
-print(f"[SAVED] {OUTPUT_DIR}/shap_values.csv")
+save_to_supabase(shap_df, TABLE_SHAP_VALUES, engine)
 
-# Simpan global importance
-global_importance.to_csv(
-    f"{OUTPUT_DIR}/shap_global_importance.csv",
-    index=False
-)
-print(f"[SAVED] {OUTPUT_DIR}/shap_global_importance.csv")
+# --- Simpan global importance ke Supabase ---
+save_to_supabase(global_importance, TABLE_SHAP_IMPORTANCE, engine)
 
-# Simpan contoh penjelasan lokal
+# --- Simpan contoh penjelasan lokal (lokal) ---
 with open(f"{OUTPUT_DIR}/shap_local_explanations.json", "w") as f:
     json.dump(local_explanations, f, indent=2, ensure_ascii=False)
-print(f"[SAVED] {OUTPUT_DIR}/shap_local_explanations.json")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/shap_local_explanations.json")
 
-# Simpan expected (base) value
+# --- Simpan metadata SHAP (lokal) ---
 if isinstance(explainer.expected_value, (list, np.ndarray)):
     base_value = float(explainer.expected_value[1])
 else:
@@ -224,7 +226,8 @@ shap_meta = {
 
 with open(f"{OUTPUT_DIR}/shap_meta.json", "w") as f:
     json.dump(shap_meta, f, indent=2, ensure_ascii=False)
-print(f"[SAVED] {OUTPUT_DIR}/shap_meta.json")
+print(f"[LOCAL SAVED] {OUTPUT_DIR}/shap_meta.json")
 
-print("\n✅ Analisis SHAP (Explainable AI) selesai!")
-print("   Output ini akan digunakan oleh 04_hybrid_decision.py dan Dashboard")
+print("\n[DONE] Analisis SHAP (Explainable AI) selesai!")
+print("   Output Supabase : tabel 'shap_values', 'shap_global_importance'")
+print("   Output Lokal    : ml_output/shap_*.json")
